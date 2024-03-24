@@ -9,41 +9,36 @@ import {
   updateUserValidation,
 } from '../core/validation/user-validation.js';
 import { validate } from '../core/validation/validation.js';
+import { toUserResponse } from '../models/user-model.js';
 
 const register = async (request) => {
-  const user = validate(registerUserValidation, request);
+  const registerRequest = validate(registerUserValidation, request);
 
-  const countUser = await prismaClient.user.count({
+  const totalUserWithSameEmail = await prismaClient.user.count({
     where: {
-      email: user.email,
+      email: registerRequest.email,
     },
   });
 
-  if (countUser === 1) {
+  if (totalUserWithSameEmail === 1) {
     throw new ResponseError(400, 'Email already exists');
   }
 
-  user.password = await bcrypt.hash(user.password, 10);
+  registerRequest.password = await bcrypt.hash(registerRequest.password, 10);
 
-  return prismaClient.user.create({
-    data: user,
-    select: {
-      email: true,
-      name: true,
-    },
+  const user = await prismaClient.user.create({
+    data: registerRequest,
   });
+
+  return toUserResponse(user);
 };
 
 const login = async (request) => {
   const loginRequest = validate(loginUserValidation, request);
 
-  const user = await prismaClient.user.findUnique({
+  let user = await prismaClient.user.findUnique({
     where: {
       email: loginRequest.email,
-    },
-    select: {
-      email: true,
-      password: true,
     },
   });
 
@@ -59,18 +54,19 @@ const login = async (request) => {
     throw new ResponseError(401, 'Email or password wrong');
   }
 
-  const token = uuid().toString();
-  return prismaClient.user.update({
-    data: {
-      token: token,
-    },
+  user = await prismaClient.user.update({
     where: {
-      email: user.email,
+      email: loginRequest.email,
     },
-    select: {
-      token: true,
+    data: {
+      token: uuid().toString(),
     },
   });
+
+  const response = toUserResponse(user);
+  response.token = user.token;
+
+  return response;
 };
 
 const get = async (email) => {
@@ -90,40 +86,28 @@ const get = async (email) => {
     throw new ResponseError(404, 'User is not found');
   }
 
-  return user;
+  return toUserResponse(user);
 };
 
-const update = async (request) => {
-  const user = validate(updateUserValidation, request);
+const update = async (user, request) => {
+  const updateRequest = validate(updateUserValidation, request);
 
-  const totalUserInDatabase = await prismaClient.user.count({
+  if (updateRequest.name) {
+    user.name = updateRequest.name;
+  }
+
+  if (updateRequest.password) {
+    user.password = await bcrypt.hash(updateRequest.password, 10);
+  }
+
+  const result = await prismaClient.user.update({
     where: {
       email: user.email,
     },
+    data: user,
   });
 
-  if (totalUserInDatabase !== 1) {
-    throw new ResponseError(404, 'User is not found');
-  }
-
-  const data = {};
-  if (user.name) {
-    data.name = user.name;
-  }
-  if (user.password) {
-    data.password = await bcrypt.hash(user.password, 10);
-  }
-
-  return prismaClient.user.update({
-    where: {
-      email: user.email,
-    },
-    data: data,
-    select: {
-      email: true,
-      name: true,
-    },
-  });
+  return toUserResponse(result);
 };
 
 const logout = async (email) => {
